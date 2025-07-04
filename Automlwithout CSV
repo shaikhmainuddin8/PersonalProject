@@ -1,0 +1,200 @@
+# Part 1: ML Module Creation and Saving (with AutoML-like features)
+
+import pandas as pd
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.svm import SVC # Support Vector Classifier
+from sklearn.metrics import accuracy_score
+import numpy as np
+import pickle
+import os
+
+def create_and_save_ml_model(model_filename="best_automl_model.pkl"):
+    """
+    Creates a machine learning model using a simplified AutoML approach,
+    trains it on synthetic data, evaluates multiple algorithms and hyperparameters,
+    and saves the best performing model to a file.
+    """
+    print("--- Part 1: Creating and Saving ML Model (AutoML-like) ---")
+
+    # 1. Generate Synthetic Data
+    np.random.seed(42) # for reproducibility
+    num_samples = 1000
+    X = np.random.rand(num_samples, 2) * 10 # 2 features, values between 0 and 10
+    y = (X[:, 0] + X[:, 1] > 10).astype(int) # Binary target based on sum of features
+
+    print(f"Generated {num_samples} samples with 2 features.")
+    print(f"Feature (X) shape: {X.shape}, Target (y) shape: {y.shape}")
+
+    # 2. Split Data into Training and Testing Sets
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    print(f"Training data size: {len(X_train)} samples")
+    print(f"Testing data size: {len(X_test)} samples")
+
+    # 3. Define Algorithms and their Hyperparameter Grids for AutoML
+    # This dictionary simulates the "search space" for AutoML
+    models_and_params = {
+        'LogisticRegression': {
+            'model': LogisticRegression(random_state=42, solver='liblinear'), # solver 'liblinear' for smaller datasets
+            'params': {
+                'C': [0.1, 1.0, 10.0], # Inverse of regularization strength
+                'penalty': ['l1', 'l2'] # Regularization type
+            }
+        },
+        'RandomForestClassifier': {
+            'model': RandomForestClassifier(random_state=42),
+            'params': {
+                'n_estimators': [50, 100, 200], # Number of trees in the forest
+                'max_depth': [None, 10, 20] # Maximum depth of the tree
+            }
+        },
+        'SVC': {
+            'model': SVC(random_state=42, probability=True), # probability=True needed for predict_proba if used
+            'params': {
+                'C': [0.1, 1.0, 10.0], # Regularization parameter
+                'kernel': ['linear', 'rbf'] # Kernel type
+            }
+        }
+    }
+
+    best_model = None
+    best_accuracy = -1
+    best_model_name = ""
+
+    print("\n--- Starting AutoML-like Model Search and Tuning ---")
+
+    # 4. Iterate through models, perform GridSearchCV, and select the best
+    for model_name, mp in models_and_params.items():
+        print(f"\nEvaluating {model_name}...")
+        classifier = mp['model']
+        params = mp['params']
+
+        # GridSearchCV for hyperparameter tuning and cross-validation
+        # cv=3 means 3-fold cross-validation
+        grid_search = GridSearchCV(classifier, params, cv=3, scoring='accuracy', n_jobs=-1, verbose=1)
+        grid_search.fit(X_train, y_train)
+
+        current_best_model = grid_search.best_estimator_
+        current_best_accuracy = grid_search.best_score_ # Best accuracy on cross-validation sets
+
+        print(f"  Best parameters for {model_name}: {grid_search.best_params_}")
+        print(f"  Best cross-validation accuracy for {model_name}: {current_best_accuracy:.4f}")
+
+        # Evaluate on the hold-out test set
+        test_accuracy = accuracy_score(y_test, current_best_model.predict(X_test))
+        print(f"  Test set accuracy for best {model_name}: {test_accuracy:.4f}")
+
+
+        if test_accuracy > best_accuracy:
+            best_accuracy = test_accuracy
+            best_model = current_best_model
+            best_model_name = model_name
+            print(f"  -> New best model found: {best_model_name} with test accuracy {best_accuracy:.4f}")
+
+    print("\n--- AutoML-like Search Complete ---")
+    print(f"Overall Best Model: {best_model_name}")
+    print(f"Overall Best Model Test Accuracy: {best_accuracy:.4f}")
+
+    # 5. Save the Overall Best Trained Model
+    try:
+        if best_model:
+            with open(model_filename, 'wb') as file:
+                pickle.dump(best_model, file)
+            print(f"Overall best model successfully saved as '{model_filename}'")
+        else:
+            print("No best model found to save.")
+    except Exception as e:
+        print(f"Error saving best model: {e}")
+
+    return model_filename
+
+# Part 2: ML Module Deployment (using Flask) - Remains largely the same
+
+from flask import Flask, request, jsonify
+import pickle
+import os
+
+# Initialize Flask app
+app = Flask(__name__)
+
+# Global variable to store the loaded model
+LOADED_MODEL = None
+MODEL_PATH = "best_automl_model.pkl" # Updated to match the new filename
+
+def load_ml_model(model_filename):
+    """
+    Loads a pre-trained ML model from a file.
+    """
+    global LOADED_MODEL
+    if LOADED_MODEL is None:
+        if not os.path.exists(model_filename):
+            print(f"Error: Model file '{model_filename}' not found.")
+            print("Please run 'create_and_save_ml_model()' first or ensure the model file is in the correct path.")
+            return None
+        try:
+            with open(model_filename, 'rb') as file:
+                LOADED_MODEL = pickle.load(file)
+            print(f"Model '{model_filename}' loaded successfully for deployment.")
+        except Exception as e:
+            print(f"Error loading model: {e}")
+            LOADED_MODEL = None
+    return LOADED_MODEL
+
+@app.route('/predict', methods=['POST'])
+def predict():
+    """
+    API endpoint for making predictions.
+    Expects a JSON payload with 'features' (a list of lists).
+    Example: {"features": [[0.5, 9.8], [2.1, 7.5]]}
+    """
+    model = load_ml_model(MODEL_PATH)
+    if model is None:
+        return jsonify({"error": "Model not loaded. Server might be misconfigured or model file missing."}), 500
+
+    try:
+        data = request.get_json(force=True)
+        features = data['features']
+        
+        # Convert features to a numpy array for prediction
+        input_data = np.array(features)
+
+        if input_data.ndim == 1: # If only one sample is provided, reshape it
+            input_data = input_data.reshape(1, -1)
+        
+        predictions = model.predict(input_data).tolist()
+        
+        return jsonify({"predictions": predictions})
+    except KeyError:
+        return jsonify({"error": "Invalid input: 'features' key is missing."}), 400
+    except Exception as e:
+        return jsonify({"error": f"An error occurred during prediction: {str(e)}"}), 500
+
+@app.route('/')
+def home():
+    """
+    Basic home endpoint to confirm the server is running.
+    """
+    return "ML Model Deployment Server is running! Use /predict endpoint for predictions."
+
+# Main execution block
+if __name__ == "__main__":
+    # 1. Create and save the ML model using AutoML-like process
+    saved_model_path = create_and_save_ml_model()
+
+    # 2. Load the model for the Flask app (optional, done within Flask app on first request)
+    #    This line is just for demonstration if you want to explicitly load it here.
+    #    The `load_ml_model` function within the Flask app handles it on demand.
+    # load_ml_model(saved_model_path)
+
+    # 3. Run the Flask application
+    print("\n--- Part 2: Deploying ML Module with Flask ---")
+    print(f"Starting Flask server. Model will be loaded from '{saved_model_path}' on first prediction request.")
+    print("To test, open your browser to http://127.0.0.1:5000/")
+    print("To make predictions, send a POST request to http://127.0.0.1:5000/predict")
+    print("Example using curl:")
+    print("curl -X POST -H \"Content-Type: application/json\" -d '{\"features\": [[1.0, 2.0], [9.0, 9.0]]}' http://127.0.0.1:5000/predict")
+    
+    # Run Flask app
+    # In a production environment, you would use a WSGI server like Gunicorn or uWSGI
+    app.run(debug=True, host='0.0.0.0', port=5000)
