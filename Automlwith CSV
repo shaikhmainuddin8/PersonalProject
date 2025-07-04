@@ -1,0 +1,208 @@
+# prompt:     np.random.seed(42) # for reproducibility
+#     num_samples = 1000
+#     X = np.random.rand(num_samples, 2) * 10 # 2 features, values between 0 and 10
+#     y = (X[:, 0] + X[:, 1] > 10).astype(int) # Binary target based on sum of features
+#     print(f"Generated {num_samples} samples with 2 features.")
+#     print(f"Feature (X) shape: {X.shape}, Target (y) shape: {y.shape}")  can we take data from csv
+
+def create_and_save_ml_model_from_csv(csv_filepath="your_data.csv", model_filename="best_automl_model.pkl", target_column='target'):
+    """
+    Creates a machine learning model using a simplified AutoML approach,
+    trains it on data from a CSV file, evaluates multiple algorithms and hyperparameters,
+    and saves the best performing model to a file.
+
+    Args:
+        csv_filepath (str): The path to the input CSV file.
+        model_filename (str): The filename to save the best model.
+        target_column (str): The name of the column containing the target variable (y).
+                             All other columns will be treated as features (X).
+    """
+    print(f"--- Part 1: Creating and Saving ML Model (AutoML-like) from '{csv_filepath}' ---")
+
+    # 1. Load Data from CSV
+    try:
+        df = pd.read_csv(csv_filepath)
+        print(f"Data loaded successfully from '{csv_filepath}'. Shape: {df.shape}")
+        print("Columns:", df.columns.tolist())
+    except FileNotFoundError:
+        print(f"Error: CSV file not found at '{csv_filepath}'")
+        return None
+    except Exception as e:
+        print(f"Error loading CSV file: {e}")
+        return None
+
+    if target_column not in df.columns:
+        print(f"Error: Target column '{target_column}' not found in the CSV file.")
+        return None
+
+    # Separate features (X) and target (y)
+    y = df[target_column]
+    X = df.drop(columns=[target_column])
+
+    # Check if there are any features left
+    if X.empty:
+        print("Error: No feature columns remaining after dropping the target column.")
+        return None
+
+    # Convert pandas DataFrames/Series to numpy arrays
+    X = X.values
+    y = y.values
+
+    print(f"Feature (X) shape: {X.shape}, Target (y) shape: {y.shape}")
+
+    # Ensure target is suitable for classification (e.g., discrete values)
+    # You might add checks here based on the expected type of your target
+
+    # 2. Split Data into Training and Testing Sets
+    # Add a check if the dataset is large enough for splitting
+    if len(X) < 2:
+         print("Error: Dataset is too small to split into training and testing sets.")
+         return None
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y if len(np.unique(y)) > 1 else None) # Use stratify for classification if possible
+    print(f"Training data size: {len(X_train)} samples")
+    print(f"Testing data size: {len(X_test)} samples")
+
+    # 3. Define Algorithms and their Hyperparameter Grids for AutoML
+    # This dictionary simulates the "search space" for AutoML
+    models_and_params = {
+        'LogisticRegression': {
+            'model': LogisticRegression(random_state=42, solver='liblinear'), # solver 'liblinear' for smaller datasets
+            'params': {
+                'C': [0.1, 1.0, 10.0], # Inverse of regularization strength
+                'penalty': ['l1', 'l2'] # Regularization type
+            }
+        },
+        'RandomForestClassifier': {
+            'model': RandomForestClassifier(random_state=42),
+            'params': {
+                'n_estimators': [50, 100, 200], # Number of trees in the forest
+                'max_depth': [None, 10, 20] # Maximum depth of the tree
+            }
+        },
+        'SVC': {
+            'model': SVC(random_state=42, probability=True), # probability=True needed for predict_proba if used
+            'params': {
+                'C': [0.1, 1.0, 10.0], # Regularization parameter
+                'kernel': ['linear', 'rbf'] # Kernel type
+            }
+        }
+    }
+
+    best_model = None
+    best_accuracy = -1
+    best_model_name = ""
+
+    print("\n--- Starting AutoML-like Model Search and Tuning ---")
+
+    # 4. Iterate through models, perform GridSearchCV, and select the best
+    # Add a check if training data is sufficient for cross-validation (cv=3 requires at least 3 samples per fold)
+    if len(X_train) < 3:
+        print("Error: Not enough training samples for cross-validation (need at least 3). Skipping AutoML search.")
+        # Fallback: Train a single model without GridSearchCV if data is too small
+        print("Attempting to train a simple Logistic Regression model directly.")
+        fallback_model = LogisticRegression(random_state=42, solver='liblinear')
+        try:
+            fallback_model.fit(X_train, y_train)
+            best_model = fallback_model
+            best_model_name = "LogisticRegression (Fallback)"
+            best_accuracy = accuracy_score(y_test, fallback_model.predict(X_test))
+            print(f"Fallback model trained. Test set accuracy: {best_accuracy:.4f}")
+        except Exception as e:
+            print(f"Error training fallback model: {e}")
+            return None
+
+    else: # Proceed with GridSearchCV if data is sufficient
+        for model_name, mp in models_and_params.items():
+            print(f"\nEvaluating {model_name}...")
+            classifier = mp['model']
+            params = mp['params']
+
+            # GridSearchCV for hyperparameter tuning and cross-validation
+            # cv=3 means 3-fold cross-validation
+            try:
+                grid_search = GridSearchCV(classifier, params, cv=3, scoring='accuracy', n_jobs=-1, verbose=1)
+                grid_search.fit(X_train, y_train)
+
+                current_best_model = grid_search.best_estimator_
+                current_best_accuracy = grid_search.best_score_ # Best accuracy on cross-validation sets
+
+                print(f"  Best parameters for {model_name}: {grid_search.best_params_}")
+                print(f"  Best cross-validation accuracy for {model_name}: {current_best_accuracy:.4f}")
+
+                # Evaluate on the hold-out test set
+                test_accuracy = accuracy_score(y_test, current_best_model.predict(X_test))
+                print(f"  Test set accuracy for best {model_name}: {test_accuracy:.4f}")
+
+                if test_accuracy > best_accuracy:
+                    best_accuracy = test_accuracy
+                    best_model = current_best_model
+                    best_model_name = model_name
+                    print(f"  -> New best model found: {best_model_name} with test accuracy {best_accuracy:.4f}")
+
+            except Exception as e:
+                 print(f"An error occurred during evaluation of {model_name}: {e}")
+                 print("Skipping this model.")
+
+
+        if best_model is None:
+             print("\n--- AutoML-like Search Complete ---")
+             print("No models were successfully trained or evaluated.")
+             return None
+
+        print("\n--- AutoML-like Search Complete ---")
+        print(f"Overall Best Model: {best_model_name}")
+        print(f"Overall Best Model Test Accuracy: {best_accuracy:.4f}")
+
+
+    # 5. Save the Overall Best Trained Model
+    try:
+        if best_model:
+            with open(model_filename, 'wb') as file:
+                pickle.dump(best_model, file)
+            print(f"Overall best model successfully saved as '{model_filename}'")
+        else:
+            print("No best model found to save.")
+            return None
+    except Exception as e:
+        print(f"Error saving best model: {e}")
+        return None
+
+    return model_filename
+
+# Example Usage:
+# Assuming you have a CSV file named 'my_classification_data.csv'
+# with columns like 'feature1', 'feature2', 'feature3', and 'target'.
+# You would call:
+# saved_model_path = create_and_save_ml_model_from_csv(csv_filepath='my_classification_data.csv', target_column='target')
+
+# To make the existing Flask app compatible, you would modify the __main__ block
+# to call this new function instead of the original create_and_save_ml_model.
+# You might also need to adjust the prediction endpoint if your features
+# from the CSV have a different structure than the synthetic data.
+
+# --- Modification Example for __main__ block ---
+# if __name__ == "__main__":
+#     # Specify your CSV file path and target column name here
+#     csv_data_path = 'your_data.csv'
+#     target_col = 'your_target_column'
+
+#     # 1. Create and save the ML model using AutoML-like process from CSV
+#     saved_model_path = create_and_save_ml_model_from_csv(csv_filepath=csv_data_path, target_column=target_col)
+
+#     if saved_model_path:
+#         # Update the global MODEL_PATH for the Flask app
+#         MODEL_PATH = saved_model_path
+#         print("\n--- Part 2: Deploying ML Module with Flask ---")
+#         print(f"Starting Flask server. Model will be loaded from '{MODEL_PATH}' on first prediction request.")
+#         print("To test, open your browser to http://127.0.0.1:5000/")
+#         print("To make predictions, send a POST request to http://127.0.0.1:5000/predict")
+#         print("Example using curl:")
+#         print("curl -X POST -H \"Content-Type: application/json\" -d '{\"features\": [[feature_value1, feature_value2, ...]]}' http://127.0.0.1:5000/predict")
+
+#         # 3. Run the Flask application
+#         # In a production environment, you would use a WSGI server like Gunicorn or uWSGI
+#         app.run(debug=True, host='0.0.0.0', port=5000)
+#     else:
+#         print("\nModel creation failed. Flask app will not start.")
+
