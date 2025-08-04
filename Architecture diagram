@@ -1,0 +1,54 @@
+graph TD
+    %% --- STAGE 1: User Interaction ---
+    subgraph " "
+        direction LR
+        User("👤<br/><b>End User</b>") -- "1. Interact" --> Frontend("🌐<br/><b>Web UI Portal</b>")
+    end
+
+    %% --- STAGE 2: Application Core ---
+    subgraph " "
+        direction LR
+        Frontend -- "2. API Request" --> Backend("🐍<br/><b>Python Backend API</b>")
+    end
+
+    %% --- STAGE 3: Backend Logic & External Services ---
+    subgraph " "
+        direction TB
+        subgraph " "
+            direction LR
+            Backend -- "3. Fetch Files" --> GitLab_Repo("📦<br/><b>GitLab Repository</b>")
+        end
+        subgraph " "
+            direction LR
+            Backend -- "4. Fetch Token" --> Artifacts("📄<br/><b>Pipeline Artifacts</b>")
+        end
+        subgraph " "
+            direction LR
+            Backend -- "5. Deploy Report" --> PowerBI("📊<br/><b>Power BI Service</b>")
+        end
+    end
+
+    %% --- Background Automation Flow (Separate Process) ---
+    subgraph sd
+        GitLab_CI("⚙️<br/><b>CI/CD Pipeline</b>")
+        SecretsManager("🔒<br/><b>Secrets Manager</b>")
+        EntraID("🆔<br/><b>Microsoft Entra ID</b>")
+        
+        GitLab_CI -- "A. Fetch Secret" --> SecretsManager
+        GitLab_CI -- "B. Authenticate" --> EntraID
+        EntraID -- "C. Return Token" --> GitLab_CI
+        GitLab_CI -- "D. Store Token" --> Artifacts
+    end
+
+    %% --- Styling ---
+    style User fill:#e0f2fe,stroke:#0ea5e9
+    style Frontend fill:#e0f2fe,stroke:#0ea5e9
+    style Backend fill:#e0f2fe,stroke:#0ea5e9
+    
+    style GitLab_Repo fill:#ffedd5,stroke:#fb923c
+    style GitLab_CI fill:#ffedd5,stroke:#fb923c
+    style Artifacts fill:#ffedd5,stroke:#fb923c
+
+    style SecretsManager fill:#dcfce7,stroke:#22c55e
+    style EntraID fill:#dcfce7,stroke:#22c55e
+    style PowerBI fill:#fefce8,stroke:#eab308
