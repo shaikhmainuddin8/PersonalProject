@@ -1,0 +1,213 @@
+import xml.etree.ElementTree as ET
+import json
+import os
+
+# --- CONFIGURATION ---
+# IMPORTANT: Update these variables before running the script.
+# 1. Path to your Tableau Workbook file. 
+#    If you have a .twbx, rename it to .zip and extract the .twb file.
+TABLEAU_WORKBOOK_PATH = 'YourWorkbook.twb' 
+
+# 2. The name of the main data table in your Power BI model where the new 
+#    measures should be created.
+POWER_BI_TARGET_TABLE = "SalesData"
+
+# 3. (Optional) Set to True if you want to connect to a real AI service.
+#    If False, it will use the hardcoded examples.
+USE_REAL_AI = False 
+AZURE_OPENAI_ENDPOINT = "YOUR_AZURE_OPENAI_ENDPOINT"
+AZURE_OPENAI_KEY = "YOUR_AZURE_OPENAI_KEY"
+AZURE_OPENAI_DEPLOYMENT_NAME = "gpt-4" # Your deployment name for a GPT model
+
+# --- PHASE 1: EXTRACTION ---
+
+def extract_tableau_metadata(twb_file_path):
+    """
+    Parses a Tableau Workbook (.twb) file to extract metadata about
+    data sources and calculated fields.
+    """
+    print("--- Phase 1: Starting Tableau Metadata Extraction ---")
+    if not os.path.exists(twb_file_path):
+        print(f"Error: File not found at '{twb_file_path}'")
+        return None
+
+    try:
+        tree = ET.parse(twb_file_path)
+        root = tree.getroot()
+        metadata = {"datasources": [], "calculated_fields": []}
+
+        for ds in root.findall('.//datasource'):
+            ds_info = {
+                "name": ds.get('name', 'N/A'),
+                "caption": ds.get('caption', ds.get('name', 'N/A')),
+                "connections": []
+            }
+            for conn in ds.findall('.//connection'):
+                ds_info["connections"].append({
+                    "class": conn.get('class', 'N/A'),
+                    "dbname": conn.get('dbname', 'N/A'),
+                    "server": conn.get('server', 'N/A'),
+                })
+            metadata["datasources"].append(ds_info)
+
+            for column in ds.findall('.//column'):
+                calc_element = column.find('calculation')
+                if calc_element is not None and calc_element.get('formula'):
+                    formula = calc_element.get('formula')
+                    clean_formula = formula.replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
+                    metadata["calculated_fields"].append({
+                        "parent_datasource": ds.get('name'),
+                        "name": column.get('name'),
+                        "caption": column.get('caption', column.get('name')),
+                        "role": column.get('role'),
+                        "datatype": column.get('datatype'),
+                        "formula": clean_formula.strip()
+                    })
+        
+        print(f"Extraction complete. Found {len(metadata['calculated_fields'])} calculated fields.")
+        return metadata
+    except ET.ParseError as e:
+        print(f"Error parsing the XML file: {e}")
+        return None
+
+# --- PHASE 2: AI-ASSISTED TRANSLATION ---
+
+def get_ai_dax_translation(tableau_formula):
+    """
+    Translates a Tableau formula to DAX using an AI model.
+    """
+    if USE_REAL_AI:
+        # This is where you would put your actual call to Azure OpenAI
+        try:
+            import openai
+            openai.api_type = "azure"
+            openai.api_base = AZURE_OPENAI_ENDPOINT
+            openai.api_version = "2023-07-01-preview"
+            openai.api_key = AZURE_OPENAI_KEY
+
+            prompt = f"""
+            Translate the following Tableau calculation into an equivalent Power BI DAX formula.
+            Provide ONLY the raw DAX code. Do not add explanations or markdown.
+            Tableau Calculation:
+            {tableau_formula}
+            """
+            
+            response = openai.ChatCompletion.create(
+                engine=AZURE_OPENAI_DEPLOYMENT_NAME,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=250
+            )
+            return response.choices[0].message['content'].strip()
+        except Exception as e:
+            print(f"Error calling AI service: {e}")
+            return f"AI_TRANSLATION_ERROR: {e}"
+    else:
+        # Using hardcoded examples for demonstration
+        if "SUM([Profit]) / SUM([Sales])" in tableau_formula:
+            return f"DIVIDE(SUM('{POWER_BI_TARGET_TABLE}'[Profit]), SUM('{POWER_BI_TARGET_TABLE}'[Sales]))"
+        elif 'IF [Region]' in tableau_formula:
+            return f"IF(SELECTEDVALUE('{POWER_BI_TARGET_TABLE}'[Region]) IN {{\"West\", \"East\"}}, \"Coasts\", \"Central\")"
+        else:
+            return "MANUAL_TRANSLATION_NEEDED"
+
+
+def translate_all_to_dax(calculated_fields):
+    """
+    Iterates through calculated fields and translates them to DAX.
+    """
+    print("\n--- Phase 2: Translating Calculations to DAX ---")
+    translations = []
+    for field in calculated_fields:
+        tableau_formula = field['formula']
+        print(f"Translating '{field['caption']}': {tableau_formula}")
+        suggested_dax = get_ai_dax_translation(tableau_formula)
+        print(f"--> DAX Suggestion: {suggested_dax}")
+        translations.append({
+            "tableau_caption": field['caption'],
+            "tableau_formula": tableau_formula,
+            "suggested_dax": suggested_dax
+        })
+    print("DAX translation phase complete.")
+    return translations
+
+# --- PHASE 3: SCRIPT GENERATION ---
+
+def generate_tabular_editor_script(dax_suggestions, target_table_name):
+    """
+    Generates a C# script for Tabular Editor to create DAX measures.
+    """
+    print("\n--- Phase 3: Generating Tabular Editor C# Script ---")
+    csharp_lines = [
+        f"// Auto-generated C# script for Tabular Editor",
+        f"var table = Model.Tables[\"{target_table_name}\"];",
+        "if (table == null) {",
+        f"    Error(\"Table '{target_table_name}' not found. Please check POWER_BI_TARGET_TABLE in the script.\");",
+        "    return;",
+        "}", ""
+    ]
+    
+    for item in dax_suggestions:
+        measure_name = item['tableau_caption'].replace('"', '""')
+        dax_formula = item['suggested_dax'].replace('"', '""').replace('\n', ' ').replace('\r', '')
+        csharp_lines.append(f'table.AddMeasure("{measure_name}", "{dax_formula}");')
+    
+    print("C# script generation complete.")
+    return "\n".join(csharp_lines)
+
+# --- MAIN EXECUTION ORCHESTRATOR ---
+
+def main():
+    """Main function to run the entire migration workflow."""
+    
+    # Create a dummy workbook if the target doesn't exist, for demonstration.
+    if not os.path.exists(TABLEAU_WORKBOOK_PATH):
+        print(f"'{TABLEAU_WORKBOOK_PATH}' not found. Creating a dummy .twb file for demonstration.")
+        dummy_content = f"""
+        <workbook>
+          <datasources>
+            <datasource name='SampleDS' caption='Sample Data Source'>
+              <connection class='sqlproxy' dbname='database-name' server='server-name'/>
+              <column name='[Calculation_123]' caption='Profit Ratio' role='measure' type='float'>
+                <calculation formula='SUM([Profit]) / SUM([Sales])' />
+              </column>
+              <column name='[Calculation_456]' caption='Region Group' role='dimension' type='string'>
+                <calculation formula='IF [Region] = &quot;West&quot; OR [Region] = &quot;East&quot; THEN &quot;Coasts&quot; ELSE &quot;Central&quot; END' />
+              </column>
+            </datasource>
+          </datasources>
+        </workbook>
+        """
+        with open(TABLEAU_WORKBOOK_PATH, 'w') as f: f.write(dummy_content)
+
+    # Phase 1
+    metadata = extract_tableau_metadata(TABLEAU_WORKBOOK_PATH)
+    if not metadata or not metadata['calculated_fields']:
+        print("No metadata or calculated fields found. Exiting.")
+        return
+    with open('tableau_metadata.json', 'w') as f: json.dump(metadata, f, indent=4)
+    print("Intermediate file 'tableau_metadata.json' created for review.")
+
+    # Phase 2
+    dax_suggestions = translate_all_to_dax(metadata['calculated_fields'])
+    with open('dax_translation_suggestions.json', 'w') as f: json.dump(dax_suggestions, f, indent=4)
+    print("Intermediate file 'dax_translation_suggestions.json' created for review.")
+
+    # Phase 3
+    csharp_script = generate_tabular_editor_script(dax_suggestions, POWER_BI_TARGET_TABLE)
+    output_cs_filename = 'create_powerbi_measures.cs'
+    with open(output_cs_filename, 'w') as f: f.write(csharp_script)
+    
+    print(f"\n--- ✅ MIGRATION SCRIPT COMPLETE ---")
+    print(f"Final C# script has been saved to '{output_cs_filename}'.")
+    print("\n--- 🚀 YOUR NEXT STEPS ---")
+    print("1. Open your Power BI Desktop file and ensure your data table is loaded.")
+    print("2. Install Tabular Editor (version 2 or 3).")
+    print("3. Launch Tabular Editor from the 'External Tools' ribbon in Power BI.")
+    print("4. In Tabular Editor, open the 'Advanced Scripting' window.")
+    print(f"5. Paste the content of '{output_cs_filename}' into the script window and click Run.")
+    print("6. Save the changes in Tabular Editor. Your Power BI model will now have all the new measures.")
+    print("7. Begin manually recreating your visuals in Power BI Desktop.")
+
+if __name__ == "__main__":
+    main()
