@@ -1,0 +1,29 @@
+services:
+  python-api:
+    build: ./python-api
+    volumes:
+      - ./python-api:/app # Mount Python source code
+    ports:
+      - "8000:8000" # Map container port 8000 to host port 8000
+    environment:
+      PYTHONUNBUFFERED: 1
+    networks:
+      - my-app-network
+
+  node-app:
+    build: ./node-app
+    ports:
+      - "3000:3000" # Map container port 3000 to host port 3000
+    volumes:
+      - ./node-app:/app          # Mount Node.js source code
+      - /app/node_modules        # <--- THIS IS THE CRITICAL LINE
+                                 # This creates an anonymous volume for node_modules,
+                                 # ensuring npm install's output persists and isn't overridden by host.
+    depends_on:
+      - python-api
+    networks:
+      - my-app-network
+
+networks:
+  my-app-network:
+    driver: bridge
