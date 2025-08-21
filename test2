@@ -1,1 +1,4 @@
 GitLab_CI -.-> |"Provides Token via Artifacts"| Backend;
+
+docker build -t my-combined-app-image . 
+docker run -p 3000:3000 -p 8000:8000 --name my-combined-app-container my-combined-app-image
