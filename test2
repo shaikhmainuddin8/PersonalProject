@@ -2,3 +2,86 @@ GitLab_CI -.-> |"Provides Token via Artifacts"| Backend;
 
 docker build -t my-combined-app-image . 
 docker run -p 3000:3000 -p 8000:8000 --name my-combined-app-container my-combined-app-image
+FROM debian:stable-slim AS micromamba_extractor
+
+# Install necessary tools for extraction
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        bzip2 \
+        ca-certificates && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# Define Micromamba version and install directory
+ENV MAMBA_ROOT_PREFIX=/opt/micromamba_tmp
+
+# Copy the pre-downloaded Micromamba archive from your host machine
+# Ensure 'micromamba.tar.bz2' is in the same directory as your Dockerfile
+COPY micromamba.tar.bz2 /tmp/micromamba.tar.bz2
+
+# Extract only the 'bin/micromamba' executable from the archive
+RUN set -eux; \
+    tar -xvjf /tmp/micromamba.tar.bz2 bin/micromamba -C /tmp/; \
+    # Move the extracted executable to a temporary location for copying
+    mv /tmp/bin/micromamba ${MAMBA_ROOT_PREFIX}; \
+    # Clean up temporary files
+    rm -rf /tmp/bin /tmp/micromamba.tar.bz2
+
+# --- Stage 2: Final Application Image ---
+# Start with the Node.js base image for your application
+FROM node:18-slim
+
+# --- Optional: Check OS of the base image ---
+RUN echo "--- Checking OS Release ---" && cat /etc/os-release && echo "---------------------------"
+
+# Install basic dependencies needed for Python in the final image
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        python3 \
+        python3-pip \
+        git && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# Copy Micromamba binary from the extractor stage
+COPY --from=micromamba_extractor /opt/micromamba_tmp /opt/micromamba
+
+# Add Micromamba to PATH for subsequent commands
+ENV MAMBA_ROOT_PREFIX=/opt/micromamba
+ENV PATH="${MAMBA_ROOT_PREFIX}/bin:$PATH"
+
+# Initialize Micromamba for subsequent RUN commands
+RUN ${MAMBA_ROOT_PREFIX}/micromamba shell init -p ${MAMBA_ROOT_PREFIX} -s bash -f /etc/profile.d/micromamba.sh
+
+# Create a Micromamba environment for your Python API
+# Name the environment 'myapi_env'
+SHELL ["micromamba", "run", "-n", "myapi_env", "/bin/bash", "-c"]
+RUN micromamba create -n myapi_env python=3.9 -y && \
+    micromamba clean --all --yes
+
+# Set the working directory for the overall application inside the container
+WORKDIR /app
+
+# Copy application code for both Node.js and Python
+COPY node-app ./node-app
+COPY python-api ./python-api
+
+# Install Node.js dependencies
+WORKDIR /app/node-app
+RUN npm install --production
+
+# Install Python dependencies in the Micromamba environment
+WORKDIR /app/python-api
+# Use 'micromamba run' to ensure pip installs into the correct environment
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Go back to the root application directory
+WORKDIR /app
+
+# Expose both ports that the Node.js (3000) and Python (8000) apps will listen on
+EXPOSE 3000
+EXPOSE 8000
+
+# The command to run when the container starts.
+# This directly starts the Node.js application, which then spawns the Python API.
+CMD ["node", "node-app/index.js"]
